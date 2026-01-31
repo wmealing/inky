@@ -1,0 +1,9 @@
+[
+ {pe4kin, [
+           {api_server_endpoint, <<"https://api.telegram.org">>}
+          ]}, 
+ {weather, [ 
+	{prefix, "https://api.openweathermap.org/data/2.5/weather"},
+	{api_key, <<"keyhere">>} ,
+	{city, <<"Brisbane">>} ] }
+].
