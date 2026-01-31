@@ -1,0 +1,3 @@
+{name, "inkybot"}.
+{token, "200955729:AAGUzwTHDqVay96sYXskyeN_JXbrgWdEc3k"}.
+{api_server_endpoint, "https://api.telegram.org"}.

@@ -13,7 +13,7 @@
 
 
 start(_StartType, _StartArgs) ->
-    {ok, Config} = file:consult("bot.config"),
+    {ok, Config} = file:consult("config/bot.config"),
     {name, Name} = lists:keyfind(name, 1, Config),
     {token, Token} = lists:keyfind(token, 1, Config),
     BotName = unicode:characters_to_binary(Name),
