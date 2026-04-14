@@ -20,6 +20,11 @@
          terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
+-define(POLL_RESTART_DELAY, 5000).  % 5 seconds before retrying
+-define(POLL_HEARTBEAT_INTERVAL, 30000).  % Check polling health every 30 seconds
+-define(POLL_TIMEOUT, 60000).  % Consider polling dead if no message in 60 seconds
+
+-record(inky_state, {bot_name, poll_ref, poll_timer, last_update_time, heartbeat_timer}).
 
 %%%===================================================================
 %%% API
@@ -30,14 +35,14 @@
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
--spec start_link(State :: #state{}) -> {ok, Pid :: pid()} |
+-spec start_link(State :: #inky_state{}) -> {ok, Pid :: pid()} |
           {error, Error :: {already_started, pid()}} |
           {error, Error :: term()} |
           ignore.
 start_link(State) ->
     io:format("INKY START LINK~n"),
     io:format("MODULE: ~p~n", [?MODULE]),
-    pe4kin_receiver:subscribe(State#state.name, ?MODULE),
+    pe4kin_receiver:subscribe(State#auth_state.name, ?MODULE),
     gen_server:start_link({local, ?SERVER}, ?MODULE, [State], []).
 
 %%%===================================================================
@@ -55,10 +60,21 @@ start_link(State) ->
           {ok, State :: term(), hibernate} |
           {stop, Reason :: term()} |
           ignore.
+
 init([State]) ->
-    io:format("FOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO~n", []),
+    % Start polling
     process_flag(trap_exit, true),
-    {ok, State}.
+    {auth_state,BotName, _Key} = State,
+    {PollRef, Timer} = start_polling(BotName),
+    HeartbeatTimer = erlang:send_after(?POLL_HEARTBEAT_INTERVAL, self(), check_polling_health),
+
+    {ok, #inky_state{
+        bot_name = BotName,
+        poll_ref = PollRef,
+        poll_timer = Timer,
+        last_update_time = erlang:system_time(millisecond),
+        heartbeat_timer = HeartbeatTimer}}.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -107,6 +123,27 @@ handle_cast(_Request, State) ->
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: normal | term(), NewState :: term()}.
 
+% Check if polling is still healthy
+handle_info(check_polling_health, State) ->
+    CurrentTime = erlang:system_time(millisecond),
+    TimeSinceLastUpdate = CurrentTime - State#inky_state.last_update_time,
+
+    io:format("INFO: Checking polling health. Time since last update: ~p ms~n", [TimeSinceLastUpdate]),
+
+    case TimeSinceLastUpdate > ?POLL_TIMEOUT of
+        true ->
+            io:format("WARNING: Polling appears to be dead (no updates in ~p ms). Attempting restart...~n", [?POLL_TIMEOUT]),
+            % Schedule immediate restart
+            gen_server:cast(self(), restart_polling_now);
+        false ->
+            io:format("INFO: Polling is healthy~n")
+    end,
+
+    % Schedule next health check
+    HeartbeatTimer = erlang:send_after(?POLL_HEARTBEAT_INTERVAL, self(), check_polling_health),
+
+
+    {noreply, State#inky_state{heartbeat_timer = HeartbeatTimer}};
 
 handle_info({pe4kin_update, _, Update}, State) ->
     #{<<"message">> := #{<<"chat">> := #{<<"id">> := ChatId}} = Message} = Update,
@@ -120,12 +157,12 @@ handle_info({pe4kin_update, _, Update}, State) ->
     ResponseText =
         case IsValid of
             true ->
-                <<"YEAH HI WADE">>;
+                ollama_worker:ask(Text);
             _ ->
-                <<"NOT VALID USER">>
+                <<"NOT VALID USER - STOP SENDING MESSAGES HERE">>
         end,
 
-    {ok, _What} = pe4kin:send_message(State#state.name, #{chat_id => ChatId, text => ResponseText}),
+    {ok, _What} = pe4kin:send_message(State#inky_state.bot_name, #{chat_id => ChatId, text => ResponseText}),
 
     {noreply, State};
 
@@ -161,3 +198,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% Start polling and return reference + timer
+%% The timer will trigger a restart if polling fails
+start_polling(BotName) ->
+    io:format("INFO: Starting HTTP polling for ~p~n", [BotName]),
+
+    % Try to start the polling
+    case catch pe4kin_receiver:start_http_poll(BotName, #{limit=>100, timeout=>60}) of
+        {'EXIT', Reason} ->
+            io:format("ERROR: Failed to start polling: ~p~n", [Reason]),
+            % Schedule a retry in POLL_RESTART_DELAY ms
+            Timer = erlang:send_after(?POLL_RESTART_DELAY, self(), restart_polling),
+            {undefined, Timer};
+        Result ->
+            io:format("INFO: Polling started successfully: ~p~n", [Result]),
+            % No timer needed if successful
+            {Result, undefined}
+    end.
+

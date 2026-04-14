@@ -5,9 +5,10 @@
     {mod, {inky_app, []}},
     {applications, [
         kernel,
-        stdlib
+        stdlib,
+	hackney
     ]},
-    {env, []},
+    {env, [{name, undefined}, {token, undefined}]},
     {modules, []},
     {licenses, ["Apache-2.0"]},
     {links, []}

@@ -41,6 +41,12 @@ init([State]) ->
                     restart => permanent,
                     shutdown => brutal_kill,
                     type => worker,
-                    modules => [inky]}],
-    % 在 5 秒內 restart 超過 3 次，整個程式會死亡，避免無限回圈
+                    modules => [inky]},
+		  #{id => ollama_client,
+                    start => {ollama_worker, start_link, []},
+                    restart => permanent,
+                    shutdown => brutal_kill,
+                    type => worker,
+                    modules => [ollama_worker]}
+	],
     {ok, {{one_for_one, 3, 5}, ChildSpecs}}.
