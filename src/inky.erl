@@ -42,7 +42,6 @@
 start_link(State) ->
     io:format("INKY START LINK~n"),
     io:format("MODULE: ~p~n", [?MODULE]),
-    pe4kin_receiver:subscribe(State#auth_state.name, ?MODULE),
     gen_server:start_link({local, ?SERVER}, ?MODULE, [State], []).
 
 %%%===================================================================
@@ -65,6 +64,10 @@ init([State]) ->
     % Start polling
     process_flag(trap_exit, true),
     {auth_state,BotName, _Key} = State,
+    io:format("INIT: subscribing self ~p to bot ~p~n", [self(), BotName]),
+    SubResult = pe4kin_receiver:subscribe(BotName, self()),
+    io:format("INIT: subscribe result ~p~n", [SubResult]),
+    ok = SubResult,
     {PollRef, Timer} = start_polling(BotName),
     HeartbeatTimer = erlang:send_after(?POLL_HEARTBEAT_INTERVAL, self(), check_polling_health),
 
@@ -107,8 +110,12 @@ handle_call(_Request, _From, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_cast(_Request, State) ->
-    io:format("GOT MSG~n",[]),
+handle_cast(restart_polling_now, State) ->
+    io:format("INFO: Restarting polling now (health check triggered)~n"),
+    {noreply, do_restart_polling(State)};
+
+handle_cast(Request, State) ->
+    io:format("GOT MSG ~p~n",[Request]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -145,7 +152,12 @@ handle_info(check_polling_health, State) ->
 
     {noreply, State#inky_state{heartbeat_timer = HeartbeatTimer}};
 
+handle_info(restart_polling, State) ->
+    io:format("INFO: Retrying polling start after earlier failure~n"),
+    {noreply, do_restart_polling(State)};
+
 handle_info({pe4kin_update, _, Update}, State) ->
+    io:format("RAW UPDATE: ~p~n", [Update]),
     #{<<"message">> := #{<<"chat">> := #{<<"id">> := ChatId}} = Message} = Update,
     #{<<"text">> :=  Text} = Message,
     #{<<"from">> := #{<<"username">> := Username}} = Message,
@@ -154,19 +166,35 @@ handle_info({pe4kin_update, _, Update}, State) ->
 
     IsValid = validate:for(Username),
 
-    ResponseText =
-        case IsValid of
-            true ->
-                ollama_worker:ask(Text);
-            _ ->
-                <<"NOT VALID USER - STOP SENDING MESSAGES HERE">>
-        end,
+    case IsValid of
+        true ->
+            case is_reload_command(Text) of
+                true ->
+                    ReplyText = case reload:run() of
+                        {ok, Msg} -> Msg;
+                        {error, Msg} -> Msg
+                    end,
+                    {ok, _} = pe4kin:send_message(State#inky_state.bot_name,
+                        #{chat_id => ChatId, text => ReplyText});
+                false ->
+                    case parse_execute(Text) of
+                        {ok, Path, Args} ->
+                            Result = execute_tool:dispatch(#{<<"path">> => Path, <<"args">> => Args}),
+                            {ok, _} = pe4kin:send_message(State#inky_state.bot_name,
+                                #{chat_id => ChatId, text => Result});
+                        no_match ->
+                            ok = ollama_worker:ask(ChatId, Text)
+                    end
+            end;
+        _ ->
+            {ok, _} = pe4kin:send_message(State#inky_state.bot_name,
+                #{chat_id => ChatId, text => <<"NOT VALID USER - STOP SENDING MESSAGES HERE">>})
+    end,
 
-    {ok, _What} = pe4kin:send_message(State#inky_state.bot_name, #{chat_id => ChatId, text => ResponseText}),
+    {noreply, State#inky_state{last_update_time = erlang:system_time(millisecond)}};
 
-    {noreply, State};
-
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    io:format("UNHANDLED INFO: ~p~n", [Info]),
     {noreply, State}.
 %%--------------------------------------------------------------------
 %% @private
@@ -198,6 +226,50 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% Recognizes an explicit "execute: <path> [args...]" message and pulls
+%% out the file to run plus its whitespace-separated arguments. Handled
+%% here (before the message ever reaches Ollama) rather than left to the
+%% model's tool-calling, since small local models are unreliable at
+%% translating free text into exact tool arguments -- this gives a
+%% deterministic, directly-invoked path that's still gated by the same
+%% username allowlist as everything else.
+%% Recognizes "/reload" (with or without a trailing "@botname" as
+%% Telegram appends in group chats), ignoring surrounding whitespace and
+%% case.
+is_reload_command(Text) ->
+    Trimmed = string:lowercase(string:trim(Text)),
+    case string:split(Trimmed, "@") of
+        [Cmd | _] -> Cmd =:= <<"/reload">>;
+        _ -> false
+    end.
+
+parse_execute(Text) ->
+    Lower = string:lowercase(Text),
+    case Lower of
+        <<"execute:", _/binary>> when byte_size(Text) > 8 ->
+            <<_:8/binary, Rest/binary>> = Text,
+            case string:lexemes(Rest, " \t") of
+                [] -> no_match;
+                [Path | Args] -> {ok, Path, Args}
+            end;
+        _ -> no_match
+    end.
+
+%% Cancel any pending retry timer, then attempt to (re)start polling.
+%% Used both by the health-check-triggered restart and by the
+%% retry-after-failure path, so a dead connection actually recovers
+%% instead of just being logged.
+do_restart_polling(State) ->
+    case State#inky_state.poll_timer of
+        undefined -> ok;
+        Timer -> erlang:cancel_timer(Timer)
+    end,
+    {PollRef, NewTimer} = start_polling(State#inky_state.bot_name),
+    State#inky_state{
+        poll_ref = PollRef,
+        poll_timer = NewTimer,
+        last_update_time = erlang:system_time(millisecond)}.
 
 %% Start polling and return reference + timer
 %% The timer will trigger a restart if polling fails

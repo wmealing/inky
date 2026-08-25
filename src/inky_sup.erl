@@ -7,6 +7,8 @@
 
 -behaviour(supervisor).
 
+-include("records.hrl").
+
 -export([start_link/1]).
 
 -export([init/1]).
@@ -43,10 +45,16 @@ init([State]) ->
                     type => worker,
                     modules => [inky]},
 		  #{id => ollama_client,
-                    start => {ollama_worker, start_link, []},
+                    start => {ollama_worker, start_link, [State#auth_state.name]},
                     restart => permanent,
                     shutdown => brutal_kill,
                     type => worker,
-                    modules => [ollama_worker]}
+                    modules => [ollama_worker]},
+		  #{id => message_user,
+                    start => {message_user, start_link, [State#auth_state.name]},
+                    restart => permanent,
+                    shutdown => brutal_kill,
+                    type => worker,
+                    modules => [message_user]}
 	],
     {ok, {{one_for_one, 3, 5}, ChildSpecs}}.
