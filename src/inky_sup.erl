@@ -55,6 +55,16 @@ init([State]) ->
                     restart => permanent,
                     shutdown => brutal_kill,
                     type => worker,
-                    modules => [message_user]}
+                    modules => [message_user]},
+		  %% Sensors get their own supervisor so a crash-looping one
+		  %% (unplugged hardware, missing device) burns its own restart
+		  %% intensity instead of this one's, which would take the bot
+		  %% and ollama_worker down with it.
+		  #{id => inky_sensor_sup,
+                    start => {inky_sensor_sup, start_link, []},
+                    restart => permanent,
+                    shutdown => infinity,
+                    type => supervisor,
+                    modules => [inky_sensor_sup]}
 	],
     {ok, {{one_for_one, 3, 5}, ChildSpecs}}.

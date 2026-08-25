@@ -6,5 +6,26 @@
 	{prefix, "https://api.openweathermap.org/data/2.5/weather"},
 	{api_key, <<"keyhere">>} ,
 	{city, <<"Brisbane">>} ] },
- {inky, [{name, "your_bot_name"}, {token, "your_bot_token"}]}
+ {inky, [{name, "your_bot_name"}, {token, "your_bot_token"},
+
+	 %% Background sensors. Omit `sensors` entirely to auto-discover every
+	 %% module with -behaviour(inky_sensor); list them explicitly to run
+	 %% only some (e.g. to disable one on a particular host).
+	 %% {sensors, [host_sensor]},
+
+	 %% All host_sensor keys are optional; these are the defaults, except
+	 %% load_alert which defaults to 2.0 x the machine's logical cores.
+	 {host_sensor, [{mounts, ["/"]},
+			{interval, 60000},
+			{disk_alert_pct, 90},
+			{mem_alert_pct, 90}]},
+
+	 %% Likewise optional. `watch` is the list of registered processes whose
+	 %% mailbox depth is reported and alerted on; memory_alert_mb is off
+	 %% unless you set it.
+	 {beam_sensor, [{interval, 30000},
+			{watch, [inky, ollama_worker, message_user]},
+			{mailbox_alert, 100},
+			{table_alert_pct, 80}]}
+	]}
 ].
