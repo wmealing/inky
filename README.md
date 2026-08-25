@@ -62,6 +62,19 @@ cp config/sys.config.example config/sys.config
 rebar3 shell
 ```
 
+### Run as a release
+
+For a standalone/production-style run (no rebar3/rebar dependency at runtime):
+
+```bash
+rebar3 as prod release
+_build/prod/rel/inky/bin/inky console   # foreground
+_build/prod/rel/inky/bin/inky start     # daemonized, then `inky stop` to stop
+```
+
+`rebar3 as prod tar` produces a self-contained `inky-<vsn>.tar.gz` (bundled ERTS) that can
+be shipped to another machine.
+
 ## 🤝 Contributing
 
 Inky is an evolving project. If you're interested in hardware control, Erlang, or local AI, feel free to dive in!

@@ -6,7 +6,9 @@
     {applications, [
         kernel,
         stdlib,
-	hackney
+        hackney,
+        gun,
+        pe4kin
     ]},
     {env, [{name, undefined}, {token, undefined}]},
     {modules, []},

@@ -18,7 +18,6 @@ start(_StartType, _StartArgs) ->
     BotToken = unicode:characters_to_binary(Token),
     State = #auth_state{name = BotName, token = BotToken},
     pe4kin:launch_bot(State#auth_state.name, State#auth_state.token, #{receiver => true}),
-    pe4kin_receiver:start_http_poll(State#auth_state.name, #{limit=>100, timeout=>60}),
     inky_sup:start_link(State).
 
 stop(_State) ->
